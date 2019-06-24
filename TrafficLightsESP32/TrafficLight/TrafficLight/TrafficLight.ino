@@ -23,6 +23,8 @@ EventGroupHandle_t tasksEventGrp;
 
 LiquidCrystal_I2C lcd(0x3F, 16, 2);
 
+SemaphoreHandle_t mutex;
+
 //WiFiClientSecure espClient;
 
 WiFiClient espClient; //pubsubclient
@@ -40,15 +42,14 @@ const int GREEN_STATE = 2;
 const int ALL_STATE = 3;
 const int NONE_STATE = 4;
 
-const char* MQTT_TOPIC = "TRAFFIC1"; //Replace this one for the traffic light number
+const char* MQTT_TOPIC = "TRAFFIC2"; //Replace this one for the traffic light number
 
-int isFirstTime = true; //False
+int isServerWorking = true;
 
 
 //BUG: AFTER A LONG TIME OF SELF RUN, LCD STOP WORKING (NOT PRINT OUT ANYTHING) (MAYBE THE LCD IS BROKEN SOMEHOW)
 //PROBABLY DUE TO WRITING TO LCD WAS INTERUPTED BY OTHER TASK WRITING TO THE SAME LCD
-//SHOULD BLOCK THE LCD WRITING WITH SOME MUTEX??
-// TODO: ADD MUTEX TO BLOCK WHEN USING LCD
+//SHOULD BLOCK THE LCD WRITING WITH SOME MUTEX?? (TRIED, NOT WORK)
 
 // the setup function runs once when you press reset or power the board
 void setup() {
@@ -62,6 +63,9 @@ void setup() {
 	pinMode(redPin, OUTPUT);
 	pinMode(yelPin, OUTPUT);
 	pinMode(grePin, OUTPUT);
+
+	//Must create before use
+	mutex = xSemaphoreCreateMutex();
 
 	tasksEventGrp = xEventGroupCreate();
 	xTaskCreate(wifiInit, "wifiInit", 7000, NULL, 1, NULL);
@@ -79,6 +83,8 @@ void loop() {
 
 void wifiInit(void* parameter) {
 	WiFi.mode(WIFI_STA);
+	TickType_t lastTime = xTaskGetTickCount();
+
 	while (1) {
 		xEventGroupWaitBits(tasksEventGrp, CHECK_WIFI_FLAG, pdFALSE, pdTRUE, portMAX_DELAY);
 		//Check to connect to wifi
@@ -87,25 +93,42 @@ void wifiInit(void* parameter) {
 			vTaskDelay(pdMS_TO_TICKS(500));
 			WiFi.begin(ssid, password);
 			//WiFi.waitForConnectResult can use this for waiting, but prefer the below method
-			lcd.clear();
+			
 			for (int i = 0; i < 7; i++) {
-				lcd.setCursor(0, 0);
-				lcd.printf("Wifi Init");
-				lcd.setCursor(i, 1);
-				lcd.printf(".");
+
+				if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+					lcd.setCursor(0, 1);
+					lcd.printf("Wifi");
+					lcd.setCursor(i + 4, 1);
+					lcd.printf(".");
+					xSemaphoreGive(mutex);
+				}
+
 				vTaskDelay(pdMS_TO_TICKS(1000));
 				if (WiFi.isConnected()) {
 					esp_wifi_set_ps(WIFI_PS_MODEM);
 					Serial.println();
 					Serial.println("Connected to WiFi");
-					lcd.setCursor(0, 1);
-					lcd.printf("Connected!");
+					if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+						lcd.setCursor(5, 1);
+						lcd.printf("Connected!");						
+						xSemaphoreGive(mutex);
+					}
+					
 					setupTime();
-
 					//Wifi is connected, clear the WIFI bit
 					xEventGroupClearBits(tasksEventGrp, CHECK_WIFI_FLAG);
 					xEventGroupSetBits(tasksEventGrp, CHECK_MQTT_FLAG);
+					
+					lastTime = xTaskGetTickCount();
+					xEventGroupClearBits(tasksEventGrp, SELF_RUN_FLAG);
+
 					break;
+				}
+				else {
+					if (((xTaskGetTickCount() - lastTime) / xPortGetTickRateHz()) >= SERVER_TIMEOUT) {
+						xEventGroupSetBits(tasksEventGrp, SELF_RUN_FLAG);
+					}
 				}
 			}
 		} else {
@@ -160,7 +183,7 @@ void selfService(void* parameter) {
 		//waiting until self run (server are down) flag are set
 		xEventGroupWaitBits(tasksEventGrp, SELF_RUN_FLAG, pdFALSE, pdTRUE, portMAX_DELAY);
 		
-		if (isFirstTime) {
+		if (isServerWorking) {
 			turnLightOn(ALL_STATE);
 			vTaskDelay(pdMS_TO_TICKS(500));
 			turnLightOn(NONE_STATE);
@@ -175,14 +198,18 @@ void selfService(void* parameter) {
 			count = 0;
 			increment = -1;			
 
-			isFirstTime = false;
+			isServerWorking = false;
 		}
 
 		if (((xTaskGetTickCount() - lastTime) / xPortGetTickRateHz()) >= timeLapse) {
 			count = 0;
-			lcd.clear();
-			lcd.setCursor(0, 0);
-			lcd.print("SERVER ERROR!");
+			
+			if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+				lcd.clear();
+				lcd.setCursor(0, 0);
+				lcd.print("SERVER ERROR!");
+				xSemaphoreGive(mutex);
+			}
 
 			state = state + increment;
 
@@ -193,10 +220,14 @@ void selfService(void* parameter) {
 		}
 
 		timeLapse = state == 1 ? 4 : 20;
-		count++;		
+		count++;	
 
-		lcd.setCursor(14, 0);
-		lcd.printf("%02d", timeLapse - count / 2);
+		if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+			lcd.setCursor(14, 0);
+			lcd.printf("%02d", timeLapse - count / 2);
+			xSemaphoreGive(mutex);
+		}
+
 		vTaskDelay(pdMS_TO_TICKS(500));
 	}
 }
@@ -217,11 +248,14 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 	sprintf(buf, "%s %s", MQTT_TOPIC, payloadstring);
 
 	mqttClient.publish("Status", buf);
-	lcd.clear();
-	lcd.setCursor(0, 0);
-	lcd.print("MQTT");
-	lcd.setCursor(0, 1);
-	lcd.print(payloadstring);
+	if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+		lcd.clear();
+		lcd.setCursor(0, 0);
+		lcd.print("MQTT");
+		lcd.setCursor(0, 1);
+		lcd.print(payloadstring);
+		xSemaphoreGive(mutex);
+	}
 	char red[] = "RED";
 	char yellow[] = "YELLOW";
 	char green[] = "GREEN";
@@ -258,13 +292,19 @@ void reconnect() {
 
 		if (mqttClient.connect(clientId.c_str())) {
 			Serial.println("connected");
-			lcd.setCursor(0, 1);
-			lcd.print("Connected     ");
+
+			if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+				lcd.clear();
+				lcd.setCursor(0, 1);
+				lcd.print("MQTT Connected!");
+				xSemaphoreGive(mutex);
+			}
+
 			//Subscribe to topic
 			mqttClient.subscribe(MQTT_TOPIC);
 			xEventGroupClearBits(tasksEventGrp, CHECK_MQTT_FLAG);
 			xEventGroupClearBits(tasksEventGrp, SELF_RUN_FLAG);
-			isFirstTime = true;
+			isServerWorking = true;
 		}
 		else {
 			Serial.print("failed, rc=");
