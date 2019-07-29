@@ -9,6 +9,6 @@ CLEAR = &&clear
 
 #Rules
 $(TARGET): $(OBJFILES)		#Rule using macros to define dependencies
-	$(CC) $(CFGLAG) -o $(TARGET) $(OBJFILES) $(LDFLAG) #macro for define C compilation command
+	$(CC) $(CFGLAG) -o $(TARGET) $(OBJFILES) $(LDFLAG)#macro for define C compilation command
 clean:
 	rm -f $(CLEAR)

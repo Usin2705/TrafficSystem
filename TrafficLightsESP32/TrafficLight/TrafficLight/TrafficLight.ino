@@ -2,6 +2,9 @@
  Name:		TrafficLight.ino
  Created:	30-May-19 23:53:57
  Author:	Usin
+
+ If you can't upload code: check out this link:https://github.com/espressif/arduino-esp32/issues/333
+ Basically just lower the upload speed, or smash that BOOT button
 */
 #include <WiFi.h>
 #include <FreeRTOS\event_groups.h>
@@ -259,6 +262,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 	char red[] = "RED";
 	char yellow[] = "YELLOW";
 	char green[] = "GREEN";
+	char lightOff[] = "OFF";
 	
 	if (memcmp(payloadstring, red, sizeof(red))==0) {
 		turnLightOn(RED_STATE);
@@ -269,6 +273,15 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 	} 
 	else if (memcmp(payloadstring, green, sizeof(green)) == 0) {
 		turnLightOn(GREEN_STATE);
+	}
+	else if (memcmp(payloadstring, lightOff, sizeof(lightOff)) == 0) {
+		turnLightOn(ALL_STATE);
+		vTaskDelay(pdMS_TO_TICKS(500));
+		turnLightOn(NONE_STATE);
+		vTaskDelay(pdMS_TO_TICKS(500));
+		turnLightOn(ALL_STATE);
+		vTaskDelay(pdMS_TO_TICKS(500));
+		turnLightOn(NONE_STATE);
 	}
 }
 
