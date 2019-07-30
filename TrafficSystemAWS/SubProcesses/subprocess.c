@@ -25,8 +25,9 @@ void on_publish(struct mosquitto *mosq, void *userdata, int mid)
 }
 
 #define RED_TIME 15
-#define YELLOW_TIME 2
+#define YELLOW_TIME 3
 #define GREEN_TIME 15
+#define DELAY_TIME 5 // Should never be higher than RED_TIME or GREEN_TIME
 #define RED_STATE  0
 #define GREEN_STATE 1
 
@@ -63,9 +64,29 @@ void writeChildLog(char * logText, int lightNo) {
 	fclose(fp);
 }
 
+void mosq_log_callback(struct mosquitto *mosq, void *userdata, int level, const char *str)
+{
+	/* Pring all log messages regardless of level. */
+  
+  switch(level){
+    //case MOSQ_LOG_DEBUG:
+    //case MOSQ_LOG_INFO:
+    //case MOSQ_LOG_NOTICE:
+    case MOSQ_LOG_WARNING:
+    case MOSQ_LOG_ERR: {
+      printf("\t\t\tCHILD: MQTT LOG %i:%s\n", level, str);
+    }
+  }
+}
+
+/*
+	IF QoS = 1 (AT LEAST ONE), MQTT STILL SEND BUT SERVER CAN'T RECEIVE (WITH NO ERROR) AFTER ABOUT 1 MIN, DON'T KNOW WHY.
+	QoS = 2 (EXACTLY ONCE), STILL FAIL, USE mosquitto_loop_start(mosq); BUT THE TRAFFIC1 OFF SIGNAL WON'T WORK
+	SOMEHOW CHANGE QoS = 0 SOLVE THE PROBLEM. DON't KNOW WHY
+*/
 
 int main(int argc, char *argv[])	{
-	printf("CHILD: Subprocess called\n");
+	printf("\t\t\tCHILD: Subprocess called\n");
 	int i = atoi(argv[1]);
 	int pipeR = atoi(argv[2]);
 	int pipeW = atoi(argv[3]);
@@ -83,7 +104,7 @@ int main(int argc, char *argv[])	{
 	} else {
 		keepAlive = GREEN_TIME + 10;
 	}
-	
+
 	struct mosquitto *mosq;	
 	
 	int err = 0;
@@ -95,6 +116,8 @@ int main(int argc, char *argv[])	{
 		perror("Failed to create mosquitto instance");
 		return(1);
 	}
+	
+	mosquitto_log_callback_set(mosq, mosq_log_callback);
 	
 	//Set the publish callback.  This is called when a message initiated with mosquitto_publish has been sent to the broker successfully.
 	//mosquitto_publish_callback_set(mosq, on_publish);
@@ -111,24 +134,25 @@ int main(int argc, char *argv[])	{
 	char buffer[9] = {'\0'};
 	sprintf(buffer, "%s%d", TOPIC_NAME, i);
 	
+	//mosquitto_loop_start(mosq);
+	
 	while (keepRunning) {		
 		if (i==0) {			
 			//This is the first child
-			//printf("child: %d, Publish RED color: %d\n", i, i);
+			//printf("child: %d, Publish RED color: %d\n", i, i);	
 			
-			//Publish a message on a given topic.
-			
+			//Publish a message on a given topic.			
 			//RED--------------------------------------------------------------------------------------
-			//mosq instance, NULL, topic, length of mess, message, QoS = 1 at least one, retain = FALSE
+			//mosq instance, NULL, topic, length of mess, message, QoS = 2 exactly once, retain = FALSE
 			//printf("TOPIC CHILD %d: %s\n", i,buffer);
-			err = mosquitto_publish(mosq, NULL, buffer, 3, "RED", 1, FALSE);
+			err = mosquitto_publish(mosq, NULL, buffer, 3, "RED", 0, FALSE);			
 			writeChildLog("Red light turn on", i);	
-			//printf("MQTT status RED %s: %s\n", buffer, mosquitto_strerror(err));			
+			//printf("\t\t\tCHILD: MQTT status RED %s: %s\n", buffer, mosquitto_strerror(err));			
 			sleep(RED_TIME);			
 			
 			//YELLOW-----------------------------------------------------------------------------------
-			//mosq instance, NULL, topic, length of mess, message, QoS = 1 at least one, retain = FALSE
-			err = mosquitto_publish(mosq, NULL, buffer, 6, "YELLOW", 1, FALSE);		
+			//mosq instance, NULL, topic, length of mess, message, QoS = 2 exactly once, retain = FALSE
+			err = mosquitto_publish(mosq, NULL, buffer, 6, "YELLOW", 0, FALSE);		
 			//printf("MQTT status YELLOW %s: %s\n", buffer, mosquitto_strerror(err));						
 			sleep(YELLOW_TIME);
 			
@@ -136,15 +160,15 @@ int main(int argc, char *argv[])	{
 			write(pipeW, &signalChr, sizeof(signalChr));						
 			
 			//GREEN------------------------------------------------------------------------------------
-			//mosq instance, NULL, topic, length of mess, message, QoS = 1 at least one, retain = FALSE
-			err = mosquitto_publish(mosq, NULL, buffer, 5, "GREEN", 1, FALSE);
+			//mosq instance, NULL, topic, length of mess, message, QoS = 2 exactly once, retain = FALSE
+			err = mosquitto_publish(mosq, NULL, buffer, 5, "GREEN", 0, FALSE);		
 			//printf("MQTT status GREEN %s: %s\n", buffer, mosquitto_strerror(err));
 
 			sleep(GREEN_TIME);
 			
 			//YELLOW-----------------------------------------------------------------------------------
-			//mosq instance, NULL, topic, length of mess, message, QoS = 1 at least one, retain = FALSE
-			err = mosquitto_publish(mosq, NULL, buffer, 6, "YELLOW", 1, FALSE);		
+			//mosq instance, NULL, topic, length of mess, message, QoS = 2 exactly once, retain = FALSE
+			err = mosquitto_publish(mosq, NULL, buffer, 6, "YELLOW", 0, FALSE);		
 			//printf("MQTT status YELLOW %s: %s\n", buffer, mosquitto_strerror(err));
 			
 			sleep(YELLOW_TIME);
@@ -156,12 +180,14 @@ int main(int argc, char *argv[])	{
 			int readResult;
 			while((readResult = read(pipeR, &signalChr, sizeof(signalChr))) < 0){
 			}
+			// Delay for syncing purpose
+			sleep(DELAY_TIME);
 			//printf("Child %d: run\n", i);				
 
 			//YELLOW-----------------------------------------------------------------------------------
-			//mosq instance, NULL, topic, length of mess, message, QoS = 1 at least one, retain = FALSE
+			//mosq instance, NULL, topic, length of mess, message, QoS = 2 exactly once, retain = FALSE
 			//printf("TOPIC CHILD %d: %s\n", i,buffer);
-			err = mosquitto_publish(mosq, NULL, buffer, 6, "YELLOW", 1, FALSE);		
+			err = mosquitto_publish(mosq, NULL, buffer, 6, "YELLOW", 0, FALSE);		
 			//printf("MQTT status YELLOW %s: %s\n", buffer, mosquitto_strerror(err));
 			sleep(YELLOW_TIME);		
 			
@@ -175,31 +201,31 @@ int main(int argc, char *argv[])	{
 			
 			//GREEN------------------------------------------------------------------------------------
 			if(state==RED_STATE) {
-				//mosq instance, NULL, topic, length of mess, message, QoS = 1 at least one, retain = FALSE
-				err = mosquitto_publish(mosq, NULL, buffer, 5, "GREEN", 1, FALSE);
+				//mosq instance, NULL, topic, length of mess, message, QoS = 2 exactly once, retain = FALSE
+				err = mosquitto_publish(mosq, NULL, buffer, 5, "GREEN", 0, FALSE);		
 				//printf("MQTT status GREEN %s: %s\n", buffer, mosquitto_strerror(err));
 				state = GREEN_STATE;
-				sleep(GREEN_TIME);
+				sleep(GREEN_TIME-DELAY_TIME);
 				
 			//RED------------------------------------------------------------------------------------
 			} else {
-				//mosq instance, NULL, topic, length of mess, message, QoS = 1 at least one, retain = FALSE
-				err = mosquitto_publish(mosq, NULL, buffer, 3, "RED", 1, FALSE);
+				//mosq instance, NULL, topic, length of mess, message, QoS = 2 exactly once, retain = FALSE
+				err = mosquitto_publish(mosq, NULL, buffer, 3, "RED", 0, FALSE);		
 				writeChildLog("Red light turn on", i);
 				//printf("MQTT status RED %s: %s\n", buffer, mosquitto_strerror(err));
 				state = RED_STATE;
-				sleep(RED_TIME);
+				sleep(RED_TIME-DELAY_TIME);
 			}
 		}
 	}
-	
 	
 	//printf("CHILD: %d terminated\n", i);
 	close(pipeR); //close read			
 	close(pipeW);
 	
 	//Send off signal to turn off the light
-	err = mosquitto_publish(mosq, NULL, buffer, 3, "OFF", 1, FALSE);		
+	err = mosquitto_publish(mosq, NULL, buffer, 3, "OFF", 0, FALSE);		
+	writeChildLog("Light turn off", i);	
 	
 	mosquitto_destroy(mosq);
 	mosquitto_lib_cleanup();
