@@ -22,7 +22,7 @@ To change the traffic light number, we need to change the line 48:
 
 ```const char* MQTT_TOPIC = "TRAFFIC2"; //Replace this one for the traffic light number```
 
-At the moment, I only have TRAFFIC0, TRAFFIC1 and TRAFFIC2. It's also the topic of MQTT. so each traffic light will listen to different MQTT topic
+At the moment, I only have TRAFFIC0, TRAFFIC1 and TRAFFIC2. It's also the topic of MQTT, so each traffic light will listen to different MQTT topic
 
 The ESP32 has 2 main tasks:
 
